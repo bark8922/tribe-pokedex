@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tribe Pokédex</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #F4F7FA; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #F4F7FA; }
+    ::-webkit-scrollbar-thumb { background: #C8D4E0; border-radius: 3px; }
+    select { appearance: none; -webkit-appearance: none; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ─── CONFIG — update this with your n8n webhook URL after importing the workflow ───
+const N8N_WEBHOOK_URL = "https://blakebarkley.app.n8n.cloud/webhook/pokedex-cards";
+
+async function fetchCards() {
+  const res = await fetch(N8N_WEBHOOK_URL);
+  const data = await res.json();
+  if (!data.results) return [];
+  return data.results.map((page) => {
+    const p = page.properties;
+    const imageFiles = p["Card Image"]?.files || [];
+    const imageUrl = imageFiles[0]?.external?.url || imageFiles[0]?.file?.url || null;
+    return {
+      id: page.id,
+      cardName: p["Card Name"]?.title?.[0]?.plain_text || "Unnamed Card",
+      collectedBy: p["Collected By"]?.rich_text?.[0]?.plain_text || "Unknown",
+      about: p["About"]?.rich_text?.[0]?.plain_text || "Unknown",
+      cardType: p["Card Type"]?.select?.name || null,
+      team: p["Team"]?.select?.name || null,
+      dateCollected: p["Date Collected"]?.date?.start || null,
+      slackLink: p["Slack Post Link"]?.url || null,
+      imageUrl,
+    };
+  });
+}
+
+const N8N_DELETE_URL = "https://blakebarkley.app.n8n.cloud/webhook/pokedex-delete";
+
+async function deleteCard(pageId) {
+  const res = await fetch(N8N_DELETE_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pageId }),
+  });
+  return res.ok;
+}
+
+
+const TYPE_COLORS = {
+  Fire:     { bg: "#FF6B35", light: "#FFF0EA", icon: "🔥" },
+  Electric: { bg: "#F7C948", light: "#FFFBEA", icon: "⚡" },
+  Water:    { bg: "#4A90D9", light: "#EAF3FD", icon: "💧" },
+  Psychic:  { bg: "#C06BDB", light: "#F7EAFC", icon: "🔮" },
+  Grass:    { bg: "#4CAF72", light: "#EAF6EF", icon: "🌿" },
+  Dragon:   { bg: "#7B5EA7", light: "#EEE8F8", icon: "🐉" },
+  default:  { bg: "#2B7FE1", light: "#EAF2FD", icon: "✨" },
+};
+const getType = (t) => TYPE_COLORS[t] || TYPE_COLORS.default;
+
+// ── PokeCard ──────────────────────────────────────────────────────────────────
+function PokeCard({ card, onClick, currentUser, onDelete }) {
+  const type = getType(card.cardType);
+  const [hov, setHov] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState(null); // {x, y}
+  const [deleting, setDeleting] = useState(false);
+  const canDelete = card.collectedBy === currentUser || currentUser === "Blake Barkley";
+
+  const handleContextMenu = (e) => {
+    if (!canDelete) return;
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleDelete = async (e) => {
+    e.stopPropagation();
+    setCtxMenu(null);
+    if (!window.confirm(`Delete "${card.cardName}"? This cannot be undone.`)) return;
+    setDeleting(true);
+    const ok = await deleteCard(card.id);
+    if (ok) onDelete(card.id);
+    else { alert("Delete failed — check the n8n workflow is active."); setDeleting(false); }
+  };
+
+  return (
+    <>
+      <div
+        onClick={() => !ctxMenu && onClick(card)}
+        onContextMenu={handleContextMenu}
+        onMouseEnter={() => setHov(true)}
+        onMouseLeave={() => setHov(false)}
+        style={{
+          cursor: deleting ? "wait" : "pointer", borderRadius: 16, overflow: "hidden", background: deleting ? "#F4F7FA" : "#fff",
+          border: `2px solid ${hov ? type.bg : "#E8EDF2"}`,
+          boxShadow: hov ? `0 12px 40px ${type.bg}33` : "0 2px 12px rgba(0,0,0,0.07)",
+          transition: "all 0.2s ease", transform: hov ? "translateY(-4px)" : "none",
+          display: "flex", flexDirection: "column", opacity: deleting ? 0.4 : 1, position: "relative",
+        }}
+      >
+        <div style={{ position: "relative", background: type.light, aspectRatio: "1", overflow: "hidden" }}>
+          {card.imageUrl
+            ? <img src={card.imageUrl} alt={card.cardName} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 52 }}>{type.icon}</div>
+          }
+          {card.cardType && (
+            <div style={{ position: "absolute", top: 8, right: 8, background: type.bg, color: "#fff", borderRadius: 20, padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>{type.icon} {card.cardType}</div>
+          )}
+          {canDelete && (
+            <div style={{ position: "absolute", bottom: 6, left: 6, background: "rgba(0,0,0,0.45)", color: "rgba(255,255,255,0.7)", borderRadius: 6, padding: "2px 7px", fontSize: 10 }}>right-click to delete</div>
+          )}
+        </div>
+        <div style={{ padding: "12px 14px 14px" }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#0F1923", marginBottom: 3 }}>{card.about}</div>
+          <div style={{ fontSize: 11, color: "#8A95A3" }}>by <span style={{ color: type.bg, fontWeight: 700 }}>{card.collectedBy}</span></div>
+          {card.dateCollected && <div style={{ fontSize: 10, color: "#B0B8C1", marginTop: 4 }}>{new Date(card.dateCollected).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>}
+        </div>
+      </div>
+
+      {/* Context menu */}
+      {ctxMenu && (
+        <>
+          <div onClick={() => setCtxMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 500 }} />
+          <div style={{
+            position: "fixed", top: ctxMenu.y, left: ctxMenu.x, zIndex: 501,
+            background: "#fff", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
+            border: "1px solid #E8EDF2", overflow: "hidden", minWidth: 160,
+          }}>
+            <button onClick={handleDelete} style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              padding: "11px 16px", background: "none", border: "none", cursor: "pointer",
+              fontSize: 14, fontWeight: 600, color: "#E85D5D", textAlign: "left",
+            }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "#FFF0F0"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+            >
+              🗑️ Delete card
+            </button>
+            <button onClick={() => setCtxMenu(null)} style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              padding: "11px 16px", background: "none", border: "none", cursor: "pointer",
+              fontSize: 14, fontWeight: 600, color: "#5A6472", borderTop: "1px solid #F0F4F8",
+            }}
+              onMouseEnter={(e) => e.currentTarget.style.background = "#F4F7FA"}
+              onMouseLeave={(e) => e.currentTarget.style.background = "none"}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+
+// ── CardViewer — fullscreen with cycling ──────────────────────────────────────
+function CardModal({ card, onClose, allCards }) {
+  const [idx, setIdx] = useState(() => allCards.findIndex((c) => c.id === card.id));
+  const current = allCards[idx] || card;
+  const type = getType(current.cardType);
+
+  const prev = () => setIdx((i) => (i - 1 + allCards.length) % allCards.length);
+  const next = () => setIdx((i) => (i + 1) % allCards.length);
+
+  useEffect(() => {
+    const h = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft") prev();
+      if (e.key === "ArrowRight") next();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  const navBtn = (onClick, side, label) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }} style={{
+      position: "fixed", top: "50%", transform: "translateY(-50%)",
+      [side]: 16, background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.25)",
+      borderRadius: "50%", width: 56, height: 56, cursor: "pointer",
+      fontSize: 28, color: "#fff", zIndex: 2001, lineHeight: 1,
+    }}>{label}</button>
+  );
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", backdropFilter: "blur(16px)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "24px 88px",
+    }}>
+      {allCards.length > 1 && navBtn(prev, "left", "‹")}
+      {allCards.length > 1 && navBtn(next, "right", "›")}
+
+      <div onClick={(e) => e.stopPropagation()} style={{
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 20, maxWidth: 500, width: "100%",
+      }}>
+        {current.imageUrl
+          ? <img src={current.imageUrl} alt={current.cardName} style={{ maxHeight: "72vh", maxWidth: "100%", objectFit: "contain", borderRadius: 16, boxShadow: "0 40px 120px rgba(0,0,0,0.7)" }} />
+          : <div style={{ width: 320, height: 320, background: getType(current.cardType).bg + "33", borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 80 }}>{type.icon}</div>
+        }
+        <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 16, padding: "14px 24px", textAlign: "center", width: "100%" }}>
+          <div style={{ color: "#fff", fontWeight: 900, fontSize: 20, marginBottom: 3 }}>{current.about}</div>
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 13 }}>
+            Collected by <span style={{ color: "#fff", fontWeight: 700 }}>{current.collectedBy}</span>
+            {current.dateCollected && ` · ${new Date(current.dateCollected).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 10, flexWrap: "wrap" }}>
+            {current.cardType && <span style={{ background: type.bg, color: "#fff", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>{type.icon} {current.cardType}</span>}
+            {current.slackLink && (
+              <a href={current.slackLink} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ background: "#2B7FE1", color: "#fff", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>
+                Slack →
+              </a>
+            )}
+          </div>
+        </div>
+        {allCards.length > 1 && (
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12 }}>{idx + 1} / {allCards.length} · ← → to cycle · Esc to close</div>
+        )}
+      </div>
+
+      <button onClick={onClose} style={{
+        position: "fixed", top: 18, right: 18, background: "rgba(255,255,255,0.1)",
+        border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: 42, height: 42,
+        cursor: "pointer", fontSize: 20, color: "#fff", fontWeight: 700, zIndex: 2002,
+      }}>×</button>
+    </div>
+  );
+}
+
+// ── Gallery ───────────────────────────────────────────────────────────────────
+function Gallery({ cards, onCardClick, currentUser, onDelete }) {
+  const [filterPerson, setFilterPerson] = useState("all");
+  const [filterTeam, setFilterTeam] = useState("all");
+  const people = [...new Set(cards.map((c) => c.about))].sort();
+  const teams = [...new Set(cards.map((c) => c.team).filter(Boolean))].sort();
+  const filtered = cards.filter((c) => {
+    if (filterPerson !== "all" && c.about !== filterPerson) return false;
+    if (filterTeam !== "all" && c.team !== filterTeam) return false;
+    return true;
+  });
+  const sel = { background: "#fff", border: "2px solid #E8EDF2", borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 600, color: "#0F1923", cursor: "pointer", outline: "none" };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <h2 style={{ fontSize: 28, fontWeight: 900, color: "#0F1923", margin: 0 }}>All Cards ✨</h2>
+        <div style={{ display: "flex", gap: 10 }}>
+          <select style={sel} value={filterPerson} onChange={(e) => setFilterPerson(e.target.value)}>
+            <option value="all">Everyone</option>
+            {people.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          {teams.length > 0 && (
+            <select style={sel} value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)}>
+              <option value="all">All Teams</option>
+              {teams.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          )}
+        </div>
+      </div>
+      {filtered.length === 0
+        ? <div style={{ textAlign: "center", padding: "60px 0", color: "#8A95A3" }}><div style={{ fontSize: 48, marginBottom: 12 }}>🎴</div><p>No cards found</p></div>
+        : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16 }}>
+            {filtered.map((c) => <PokeCard key={c.id} card={c} onClick={onCardClick} currentUser={currentUser} onDelete={onDelete} />)}
+          </div>
+      }
+    </div>
+  );
+}
+
+// ── MyPokedex ─────────────────────────────────────────────────────────────────
+function MyPokedex({ cards, currentUser, onCardClick, onDelete }) {
+  const mine = cards.filter((c) => c.collectedBy === currentUser);
+  const aboutMe = cards.filter((c) => c.about === currentUser);
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 40 };
+  const sectionHead = { fontSize: 13, fontWeight: 800, color: "#8A95A3", marginBottom: 16, textTransform: "uppercase", letterSpacing: 1 };
+  return (
+    <div>
+      <h2 style={{ fontSize: 28, fontWeight: 900, color: "#0F1923", marginBottom: 6 }}>My Pokédex 🎮</h2>
+      <p style={{ color: "#8A95A3", marginBottom: 32, fontSize: 15 }}>
+        {mine.length} collected · {aboutMe.length} about you
+      </p>
+      {mine.length > 0 && <><h3 style={sectionHead}>Cards You've Collected</h3><div style={grid}>{mine.map((c) => <PokeCard key={c.id} card={c} onClick={onCardClick} currentUser={currentUser} onDelete={onDelete} />)}</div></>}
+      {aboutMe.length > 0 && <><h3 style={sectionHead}>Cards About You</h3><div style={grid}>{aboutMe.map((c) => <PokeCard key={c.id} card={c} onClick={onCardClick} currentUser={currentUser} onDelete={onDelete} />)}</div></>}
+      {mine.length === 0 && aboutMe.length === 0 && (
+        <div style={{ textAlign: "center", padding: "60px 0", color: "#8A95A3" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>☕</div>
+          <p style={{ fontSize: 16 }}>No cards yet — go have a coffee chat!</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Profiles ──────────────────────────────────────────────────────────────────
+function Profiles({ cards, onCardClick, currentUser, onDelete }) {
+  const [selected, setSelected] = useState(null);
+  const people = [...new Set(cards.map((c) => c.about))].sort();
+  if (selected) {
+    const personCards = cards.filter((c) => c.about === selected);
+    const collectedCards = cards.filter((c) => c.collectedBy === selected);
+    const sectionHead = { fontSize: 13, fontWeight: 800, color: "#8A95A3", marginBottom: 16, textTransform: "uppercase", letterSpacing: 1 };
+    const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 16, marginBottom: 40 };
+    return (
+      <div>
+        <button onClick={() => setSelected(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#2B7FE1", fontWeight: 700, fontSize: 14, padding: "0 0 24px", display: "flex", alignItems: "center", gap: 6 }}>
+          ← Back to profiles
+        </button>
+        <h2 style={{ fontSize: 32, fontWeight: 900, color: "#0F1923", marginBottom: 4 }}>{selected}</h2>
+        <p style={{ color: "#8A95A3", marginBottom: 32 }}>{personCards.length} cards · {collectedCards.length} collected by them</p>
+        {personCards.length > 0 && <><h3 style={sectionHead}>Their Cards</h3><div style={grid}>{personCards.map((c) => <PokeCard key={c.id} card={c} onClick={onCardClick} currentUser={currentUser} onDelete={onDelete} />)}</div></>}
+        {collectedCards.length > 0 && <><h3 style={sectionHead}>Cards They've Collected</h3><div style={grid}>{collectedCards.map((c) => <PokeCard key={c.id} card={c} onClick={onCardClick} currentUser={currentUser} onDelete={onDelete} />)}</div></>}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <h2 style={{ fontSize: 28, fontWeight: 900, color: "#0F1923", marginBottom: 24 }}>Profiles 👥</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+        {people.map((person) => {
+          const count = cards.filter((c) => c.about === person).length;
+          return (
+            <div key={person} onClick={() => setSelected(person)}
+              style={{ background: "#fff", border: "2px solid #E8EDF2", borderRadius: 16, padding: 20, cursor: "pointer", display: "flex", alignItems: "center", gap: 14, transition: "all 0.15s" }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2B7FE1"; e.currentTarget.style.boxShadow = "0 4px 20px #2B7FE122"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#E8EDF2"; e.currentTarget.style.boxShadow = "none"; }}
+            >
+              <div style={{ width: 44, height: 44, borderRadius: "50%", background: "#EAF2FD", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 900, fontSize: 16, color: "#2B7FE1", flexShrink: 0 }}>
+                {person.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 15, color: "#0F1923" }}>{person}</div>
+                <div style={{ fontSize: 12, color: "#8A95A3" }}>{count} card{count !== 1 ? "s" : ""}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Leaderboard ───────────────────────────────────────────────────────────────
+function Leaderboard({ cards }) {
+  const counts = {};
+  cards.forEach((c) => { counts[c.collectedBy] = (counts[c.collectedBy] || 0) + 1; });
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const medals = ["🥇", "🥈", "🥉"];
+  return (
+    <div style={{ maxWidth: 600, margin: "0 auto" }}>
+      <h2 style={{ fontSize: 28, fontWeight: 900, color: "#0F1923", marginBottom: 24 }}>Leaderboard 🏆</h2>
+      {sorted.length === 0 && <p style={{ color: "#8A95A3" }}>No cards yet!</p>}
+      {sorted.map(([name, count], i) => (
+        <div key={name} style={{
+          display: "flex", alignItems: "center", gap: 16,
+          background: i === 0 ? "#FFFBEA" : "#fff",
+          border: `2px solid ${i === 0 ? "#F7C948" : "#E8EDF2"}`,
+          borderRadius: 16, padding: "16px 20px", marginBottom: 12,
+          boxShadow: i === 0 ? "0 4px 20px #F7C94833" : "0 2px 8px rgba(0,0,0,0.05)",
+        }}>
+          <span style={{ fontSize: 28, width: 40, textAlign: "center" }}>{medals[i] || `${i + 1}`}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 800, fontSize: 16, color: "#0F1923" }}>{name}</div>
+            <div style={{ fontSize: 13, color: "#8A95A3" }}>{count} card{count !== 1 ? "s" : ""} collected</div>
+          </div>
+          <div style={{ background: "#2B7FE1", color: "#fff", borderRadius: 12, padding: "6px 16px", fontWeight: 900, fontSize: 20 }}>{count}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [cards, setCards] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [view, setView] = useState("gallery");
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("tribe_pokedex_user") || "");
+  const [showPicker, setShowPicker] = useState(false);
+
+  const handleDelete = useCallback((deletedId) => {
+    setCards((prev) => prev.filter((c) => c.id !== deletedId));
+    setSelectedCard(null);
+  }, []);
+
+  const loadCards = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await fetchCards();
+      setCards(data);
+    } catch (e) {
+      setError("Failed to load cards. Make sure the n8n proxy workflow is active.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadCards(); }, []);
+
+  const people = [...new Set(cards.map((c) => c.about))].sort();
+  useEffect(() => { if (!currentUser && people.length > 0) setShowPicker(true); }, [people.length, currentUser]);
+
+  const navItems = [
+    { id: "mypokedex", label: "My Pokédex", icon: "🎮" },
+    { id: "gallery", label: "All Cards", icon: "✨" },
+    { id: "profiles", label: "Profiles", icon: "👥" },
+    { id: "leaderboard", label: "Leaderboard", icon: "🏆" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#F4F7FA" }}>
+      {/* Header */}
+      <div style={{ background: "#2B7FE1", padding: "0 32px", boxShadow: "0 2px 20px rgba(43,127,225,0.35)", position: "sticky", top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 0" }}>
+            <div style={{ background: "rgba(255,255,255,0.2)", borderRadius: 10, padding: "6px 10px", fontSize: 22 }}>🎴</div>
+            <div>
+              <div style={{ color: "#fff", fontWeight: 900, fontSize: 20 }}>Tribe Pokédex</div>
+              <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Coffee Chat Collection</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {navItems.map((n) => (
+              <button key={n.id} onClick={() => setView(n.id)} style={{
+                background: view === n.id ? "rgba(255,255,255,0.2)" : "transparent",
+                border: `1px solid ${view === n.id ? "rgba(255,255,255,0.3)" : "transparent"}`,
+                color: "#fff", borderRadius: 10, padding: "8px 14px",
+                cursor: "pointer", fontSize: 13, fontWeight: 600,
+              }}>{n.icon} {n.label}</button>
+            ))}
+            <button onClick={() => setShowPicker(true)} style={{
+              background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)",
+              color: "#fff", borderRadius: 10, padding: "8px 14px",
+              cursor: "pointer", fontSize: 13, fontWeight: 600, marginLeft: 4,
+            }}>
+              {currentUser ? `👤 ${currentUser.split(" ")[0]}` : "👤 Who are you?"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats bar */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #E8EDF2" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "10px 32px", display: "flex", gap: 28, alignItems: "center" }}>
+          {[
+            { label: "Total Cards", value: cards.length },
+            { label: "Collectors", value: new Set(cards.map((c) => c.collectedBy)).size },
+            { label: "Featured", value: new Set(cards.map((c) => c.about)).size },
+          ].map((s) => (
+            <div key={s.label} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+              <span style={{ fontWeight: 900, fontSize: 22, color: "#2B7FE1" }}>{loading ? "—" : s.value}</span>
+              <span style={{ fontSize: 12, color: "#8A95A3" }}>{s.label}</span>
+            </div>
+          ))}
+          <button onClick={loadCards} style={{ marginLeft: "auto", background: "none", border: "1px solid #E8EDF2", borderRadius: 8, padding: "5px 12px", fontSize: 12, color: "#8A95A3", cursor: "pointer" }}>
+            ↻ Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "40px 32px" }}>
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>🎴</div>
+            <p style={{ color: "#8A95A3", fontSize: 16 }}>Loading your Pokédex...</p>
+          </div>
+        ) : error ? (
+          <div style={{ textAlign: "center", padding: "80px 0" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>⚠️</div>
+            <p style={{ color: "#E85D5D", fontSize: 16 }}>{error}</p>
+            <p style={{ color: "#8A95A3", fontSize: 13, marginTop: 8 }}>Make sure the n8n "Tribe Pokédex — API Proxy" workflow is active</p>
+          </div>
+        ) : (
+          <>
+            {view === "gallery" && <Gallery cards={cards} onCardClick={setSelectedCard} currentUser={currentUser} onDelete={handleDelete} />}
+            {view === "mypokedex" && <MyPokedex cards={cards} currentUser={currentUser} onCardClick={setSelectedCard} onDelete={handleDelete} />}
+            {view === "profiles" && <Profiles cards={cards} onCardClick={setSelectedCard} currentUser={currentUser} onDelete={handleDelete} />}
+            {view === "leaderboard" && <Leaderboard cards={cards} />}
+          </>
+        )}
+      </div>
+
+      {/* Card modal */}
+      {selectedCard && <CardModal card={selectedCard} onClose={() => setSelectedCard(null)} allCards={cards} />}
+
+      {/* User picker */}
+      {showPicker && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000, padding: 24 }}>
+          <div style={{ background: "#fff", borderRadius: 24, padding: 40, maxWidth: 380, width: "100%", textAlign: "center" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>👋</div>
+            <h2 style={{ margin: "0 0 8px", fontSize: 24, fontWeight: 900, color: "#0F1923" }}>Who are you?</h2>
+            <p style={{ color: "#8A95A3", marginBottom: 24, fontSize: 14 }}>Pick your name to personalise your Pokédex</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflowY: "auto" }}>
+              {people.map((p) => (
+                <button key={p} onClick={() => { setCurrentUser(p); localStorage.setItem("tribe_pokedex_user", p); setShowPicker(false); }}
+                  style={{ background: "#F4F7FA", border: "2px solid #E8EDF2", borderRadius: 12, padding: "12px 20px", cursor: "pointer", fontSize: 15, fontWeight: 600, color: "#0F1923", textAlign: "left" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2B7FE1"; e.currentTarget.style.background = "#EAF2FD"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#E8EDF2"; e.currentTarget.style.background = "#F4F7FA"; }}
+                >{p}</button>
+              ))}
+            </div>
+            {currentUser && <button onClick={() => setShowPicker(false)} style={{ marginTop: 16, background: "none", border: "none", color: "#8A95A3", cursor: "pointer", fontSize: 13 }}>Cancel</button>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
